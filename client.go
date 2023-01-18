@@ -1,3 +1,4 @@
+//go:build linux
 // +build linux
 
 package nbd
@@ -40,6 +41,7 @@ type Client struct {
 	sockFd    int
 
 	sendFlush, sendTrim bool
+	readOnly            bool
 
 	dev *os.File
 
@@ -75,10 +77,15 @@ func (c *Client) SetBlockSize(size int) {
 	c.blocksize = size
 }
 
+func (c *Client) SetReadOnly(flag bool) {
+	c.readOnly = flag
+}
+
+func (c *Client) SetLogger(log *logrus.Logger) {
+	c.log = log
+}
+
 func (c *Client) Run() (err error) {
-	if c.log == nil {
-		c.log = logrus.StandardLogger()
-	}
 	c.dev, err = os.OpenFile(c.devpath, os.O_RDWR, 0600)
 	if err != nil {
 		return
@@ -100,9 +107,6 @@ func (c *Client) Run() (err error) {
 			return
 		}
 	}
-	if err = ioctl(devFd, NBD_SET_SOCK, uintptr(c.sockFd)); err != nil {
-		return
-	}
 
 	var flags uintptr
 
@@ -114,19 +118,37 @@ func (c *Client) Run() (err error) {
 		flags |= NBD_FLAG_SEND_TRIM
 	}
 
-	ioctl(devFd, NBD_SET_FLAGS, uintptr(flags)) // ignore errors
+	if c.readOnly {
+		flags |= NBD_FLAG_READ_ONLY
+	}
+
+	if err1 := ioctl(devFd, NBD_SET_FLAGS, flags); err1 != nil {
+		// ignore errors as some features may not be supported
+		if c.log != nil {
+			c.log.Warnf("Could not set flags: %v", err1)
+		}
+	}
+
+	if err = ioctl(devFd, NBD_SET_SOCK, uintptr(c.sockFd)); err != nil {
+		return
+	}
+
 	go func() {
 		//opens the device file at least once, to make sure the partition table is updated
 		tmp, err := os.Open(c.devpath)
 		if err != nil {
-			c.log.Errorf("Cannot open the device %s: %s", c.devpath, err)
+			if c.log != nil {
+				c.log.Errorf("Cannot open the device %s: %s", c.devpath, err)
+			}
 		}
 		tmp.Close()
 	}()
 
 	// The following call will block until the client disconnects
 	err = ioctl(devFd, NBD_DO_IT, 0)
-	c.log.Debug("Finished NBD client")
+	if c.log != nil {
+		c.log.Debug("Finished NBD client")
+	}
 	ioctl(devFd, NBD_CLEAR_SOCK, 0)
 	c.dev.Close()
 	syscall.Close(int(c.sockFd))
