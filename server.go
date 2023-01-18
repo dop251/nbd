@@ -2,7 +2,7 @@ package nbd
 
 import (
 	"encoding/binary"
-	"fmt"
+	"errors"
 	"io"
 	"os"
 	"sync"
@@ -94,6 +94,8 @@ var cmdMap = [5]handlerFunc{
 	opDeviceTrim,
 }
 
+var ErrInvalidMagic = errors.New("received a packet with invalid Magic number")
+
 // NewProcPool creates an instance of process pool with given size. It can be used to limit the number of
 // simultaneously processed requests across multiple connections (see SetPool()).
 func NewProcPool(size int) ProcPool {
@@ -137,7 +139,7 @@ func (c *ServerConn) SetLogger(log *logrus.Logger) {
 	c.log = log
 }
 
-// Serve serves the connection until it's closed (either by teh remote party or by calling Close()).
+// Serve serves the connection until it's closed (either by the remote party or by calling Close()).
 func (c *ServerConn) Serve() (err error) {
 	if c.log == nil {
 		c.log = logrus.StandardLogger()
@@ -155,7 +157,7 @@ func (c *ServerConn) Serve() (err error) {
 	for {
 		ctxTaken = false
 
-		_, err := io.ReadFull(c.conn, buf[:])
+		_, err = io.ReadFull(c.conn, buf[:])
 		if err != nil {
 			break
 		}
@@ -165,7 +167,7 @@ func (c *ServerConn) Serve() (err error) {
 		unmarshalNbdRequest(buf[:], &ctx.request)
 		c.log.Debugf("%#v", ctx.request)
 		if ctx.request.Magic != NBD_REQUEST_MAGIC {
-			err = fmt.Errorf("Fatal error: received packet with wrong Magic number")
+			err = ErrInvalidMagic
 			break
 		}
 
@@ -183,7 +185,7 @@ func (c *ServerConn) Serve() (err error) {
 		} else {
 			if tp == NBD_CMD_WRITE {
 				ctx.payload = ctx.buf.allocate(int(ctx.request.Length))
-				_, err := io.ReadFull(c.conn, ctx.payload)
+				_, err = io.ReadFull(c.conn, ctx.payload)
 				if err != nil {
 					break
 				}
